@@ -3,6 +3,14 @@
 #include <stdlib.h>
 #include <string>
 #include <vector>
+#include <random>
+
+#include <functional>
+#include <algorithm>
+#include <iostream>
+#include <iterator>
+#include <climits>
+
 
 #include <boost/program_options.hpp>
 #include <experimental/filesystem>
@@ -20,11 +28,13 @@
 #define TENSOR_HEIGHT 257
 #define TENSOR_WIDTH 257
 
-#define IMAGE_MEAN = 128.0f;
-#define IMAGE_STD = 128.0f;
-#define NUM_CLASSES = 21;
-#define COLOR_CHANNELS = 3;
-#define BYTES_PER_POINT = 4;
+#define IMAGE_MEAN 128.0f
+#define IMAGE_STD 128.0f
+#define NUM_CLASSES 21
+#define COLOR_CHANNELS 3
+#define BYTES_PER_POINT 4
+
+//#define rand_rgba() (uint8_t)(255.f*(((double) std::rand() / (RAND_MAX)) + 1))
 
 // See https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/examples/minimal/minimal.cc
 // See https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/examples/label_image/label_image.cc
@@ -53,10 +63,34 @@ std::string parsePathFromOpts(const po::variables_map& vm, const std::string& id
     return path;
 }
 
+/*rgb_alpha_pixel rand_rgba(uint8_t alpha=255) {
+//    int a = std::rand();
+//    return rgb_alpha_pixel((unsigned char) a, (unsigned char) a >> 8, (unsigned char) a >> 16, alpha);
+      return rgb_alpha_pixel(
+              (unsigned char) std::rand(),
+              (unsigned char) std::rand(),
+              (unsigned char) std::rand(),
+              alpha);
+}*/
+
+rgb_alpha_pixel rand_rgba(uint8_t alpha=255) {
+    std::random_device r;
+
+    auto rand_uchar = std::bind(std::uniform_int_distribution<>(0, UCHAR_MAX),
+                          std::mt19937(r()));
+
+    return rgb_alpha_pixel(
+            rand_uchar(),
+            rand_uchar(),
+            rand_uchar(),
+            alpha);
+}
+
+
 template <class T>
 void resize(T* out, uint8_t* in, int image_height, int image_width,
             int image_channels, int wanted_height, int wanted_width,
-            int wanted_channels) {
+            int wanted_channels, bool normalize=true) {
     int number_of_pixels = image_height * image_width * image_channels;
     std::unique_ptr<tflite::Interpreter> interpreter(new tflite::Interpreter);
 
@@ -96,7 +130,6 @@ void resize(T* out, uint8_t* in, int image_height, int image_width,
     // in[] are integers, cannot do memcpy() directly
     auto input = interpreter->typed_tensor<T>(0);
     for (int i = 0; i < number_of_pixels; i++) {
-//        input[i] = in[i]/255.f;
         input[i] = in[i];
     }
 
@@ -110,7 +143,11 @@ void resize(T* out, uint8_t* in, int image_height, int image_width,
     auto output_number_of_pixels = wanted_height * wanted_width * wanted_channels;
 
     for (int i = 0; i < output_number_of_pixels; i++) {
-        out[i] = (T) output[i];
+        if (normalize) {
+            out[i] = ((T) output[i] - IMAGE_MEAN) / IMAGE_STD;
+        } else {
+            out[i] = (T) output[i];
+        }
     }
 }
 
@@ -227,12 +264,9 @@ int main(int ac, const char *const *av) {
     for (int row=0; row<test_img.nr(); row++) {
         for (int col=0; col<test_img.nc(); col++) {
             long index = (row * TENSOR_WIDTH + col) * 3; // + k;
-//            test_img[row][col].red = input[index]*255;
-//            test_img[row][col].green = input[index+1]*255;
-//            test_img[row][col].blue = input[index+2]*255;
-            test_img[row][col].red = input[index];
-            test_img[row][col].green = input[index+1];
-            test_img[row][col].blue = input[index+2];
+            test_img[row][col].red = input[index]*IMAGE_STD+IMAGE_MEAN;
+            test_img[row][col].green = input[index+1]*IMAGE_STD+IMAGE_MEAN;
+            test_img[row][col].blue = input[index+2]*IMAGE_STD+IMAGE_MEAN;
         }
     }
     image_window test_win(test_img, "Test Image");
@@ -255,15 +289,31 @@ int main(int ac, const char *const *av) {
         std::cout << std::endl;
     }
 
-    dlib::array2d<unsigned char> out_img(TENSOR_HEIGHT,TENSOR_WIDTH);
-//    for (int i = 0; i < output_number_of_pixels; i++) {
-//        out.push_back((uint8_t)output[i]*255);
-//    }
+    dlib::array2d<rgb_alpha_pixel> out_img(TENSOR_HEIGHT,TENSOR_WIDTH);
+    std::vector<rgb_alpha_pixel> mSegmentColors;
+    for (int i = 0; i < NUM_CLASSES; i++) {
+        if (i == 0) {
+            mSegmentColors.push_back(rgb_alpha_pixel(0,0,0,0)); // Transparent
+        } else {
+            mSegmentColors.push_back(rand_rgba(150));
+        }
+    }
+
+    float maxVal = 0;
     for (int row=0; row<TENSOR_HEIGHT; row++) {
         for (int col=0; col<TENSOR_WIDTH; col++) {
-            long index = (row * TENSOR_WIDTH + col) * 21; // + k;
-//            long index = row * TENSOR_WIDTH + col;
-            out_img[col][row] = (unsigned char)output[index]*50;
+            int mSegmentBits = 0;
+
+            for (int c = 0; c < NUM_CLASSES; c++) {
+                long index = (row * TENSOR_WIDTH * NUM_CLASSES + col * NUM_CLASSES + c);
+                float val = output[index];
+                if (c == 0 || val > maxVal) {
+                    maxVal = val;
+                    mSegmentBits = c;
+                }
+            }
+
+            out_img[row][col] = mSegmentColors[mSegmentBits];
         }
     }
 
