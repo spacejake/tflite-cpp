@@ -20,6 +20,12 @@
 #define TENSOR_HEIGHT 257
 #define TENSOR_WIDTH 257
 
+#define IMAGE_MEAN = 128.0f;
+#define IMAGE_STD = 128.0f;
+#define NUM_CLASSES = 21;
+#define COLOR_CHANNELS = 3;
+#define BYTES_PER_POINT = 4;
+
 // See https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/examples/minimal/minimal.cc
 // See https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/examples/label_image/label_image.cc
 using namespace dlib;
@@ -88,8 +94,9 @@ void resize(T* out, uint8_t* in, int image_height, int image_width,
 
     // fill input image
     // in[] are integers, cannot do memcpy() directly
-    auto input = interpreter->typed_tensor<float>(0);
+    auto input = interpreter->typed_tensor<T>(0);
     for (int i = 0; i < number_of_pixels; i++) {
+//        input[i] = in[i]/255.f;
         input[i] = in[i];
     }
 
@@ -99,11 +106,11 @@ void resize(T* out, uint8_t* in, int image_height, int image_width,
 
     interpreter->Invoke();
 
-    auto output = interpreter->typed_tensor<float>(2);
+    auto output = interpreter->typed_tensor<T>(2);
     auto output_number_of_pixels = wanted_height * wanted_width * wanted_channels;
 
     for (int i = 0; i < output_number_of_pixels; i++) {
-        out[i] = (uint8_t) output[i];
+        out[i] = (T) output[i];
     }
 }
 
@@ -155,11 +162,21 @@ int main(int ac, const char *const *av) {
     } else {
         printf("Loaded model: %s\n", graph_path.c_str());
     }
-
     // Build the interpreter
     tflite::ops::builtin::BuiltinOpResolver resolver;
     std::unique_ptr<tflite::Interpreter> interpreter;
     tflite::InterpreterBuilder(*model, resolver)(&interpreter);
+
+    auto tensor_size = interpreter->tensors_size();
+    std::cout << "GRAPH Size: " << tensor_size;
+    for (int idx = 0; idx < tensor_size; ++idx) {
+        std::cout << "\n\tTensor Name[" << idx << "]: " << interpreter->tensor(idx)->name << " Size: ";
+        for (int i = 0; i < interpreter->tensor(idx)->dims->size; ++i) {
+            std::cout << interpreter->tensor(idx)->dims->data[i] << " ";
+        }
+        std::cout << std::endl;
+    }
+
 
     // Resize input tensors, if desired.
     interpreter->AllocateTensors();
@@ -191,7 +208,14 @@ int main(int ac, const char *const *av) {
     }
 
     // TODO: Convert to tensor
-    printf("Input Name: %s\n",interpreter->GetInputName(0));
+//    printf("Input Name: %s, %d\n",interpreter->GetInputName(0), interpreter->tensor(0)->dims[0]);
+    int input_idx = interpreter->inputs()[0];
+    std::cout << "Input Name: " << interpreter->GetInputName(0) << "/" << interpreter->tensor(input_idx)->name << " Size: ";
+    for (int i = 0; i < interpreter->tensor(input_idx)->dims->size; ++i) {
+        std::cout << interpreter->tensor(input_idx)->dims->data[i] << " ";
+    }
+    std::cout << std::endl;
+
     float* input = interpreter->typed_input_tensor<float>(0);
     resize<float>(input, in.data(),
                   img.nr(), img.nc(), 3,
@@ -203,6 +227,9 @@ int main(int ac, const char *const *av) {
     for (int row=0; row<test_img.nr(); row++) {
         for (int col=0; col<test_img.nc(); col++) {
             long index = (row * TENSOR_WIDTH + col) * 3; // + k;
+//            test_img[row][col].red = input[index]*255;
+//            test_img[row][col].green = input[index+1]*255;
+//            test_img[row][col].blue = input[index+2]*255;
             test_img[row][col].red = input[index];
             test_img[row][col].green = input[index+1];
             test_img[row][col].blue = input[index+2];
@@ -215,18 +242,28 @@ int main(int ac, const char *const *av) {
 
 
     // TODO: get output and convert back to image [1, 257, 257, 1] == [ 257,257]
-    printf("Output Name: %s\n",interpreter->GetOutputName(0));
+//    printf("Output Name: %s\n",interpreter->GetOutputName(0));
     float* output = interpreter->typed_output_tensor<float>(0);
+    //    int output_idx = interpreter->outputs()[0];
+    for (int idx = 0; idx < interpreter->outputs().size(); ++idx) {
+        auto output_idx = interpreter->outputs()[idx];
+        std::cout << "Output Name[" << idx << "->" << output_idx << "]: " << interpreter->GetOutputName(idx) << "/"
+                  << interpreter->tensor(output_idx)->name << " Size: ";
+        for (int i = 0; i < interpreter->tensor(output_idx)->dims->size; ++i) {
+            std::cout << interpreter->tensor(output_idx)->dims->data[i] << " ";
+        }
+        std::cout << std::endl;
+    }
 
     dlib::array2d<unsigned char> out_img(TENSOR_HEIGHT,TENSOR_WIDTH);
 //    for (int i = 0; i < output_number_of_pixels; i++) {
 //        out.push_back((uint8_t)output[i]*255);
 //    }
-    for (int row=0; row<out_img.nr(); row++) {
-        for (int col=0; col<out_img.nc(); col++) {
-            long index = (row * TENSOR_WIDTH + col); // + k;
+    for (int row=0; row<TENSOR_HEIGHT; row++) {
+        for (int col=0; col<TENSOR_WIDTH; col++) {
+            long index = (row * TENSOR_WIDTH + col) * 21; // + k;
 //            long index = row * TENSOR_WIDTH + col;
-            out_img[col][row] = (unsigned char)output[index];
+            out_img[col][row] = (unsigned char)output[index]*50;
         }
     }
 
