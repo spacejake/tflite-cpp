@@ -27,7 +27,10 @@ endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -march=native -DUSE_SSE4_INSTRUCTIONS=ON")
 
 ############## Define Preprocessor Vars ##################
-add_definitions ( -DMODEL_DIR=\"${CMAKE_SOURCE_DIR}/models\")
+#add_definitions ( -DMODEL_DIR=\"${CMAKE_SOURCE_DIR}/models\")
+
+find_package(Boost 1.58 COMPONENTS program_options system filesystem REQUIRED)
+find_package(dlib REQUIRED)
 
 ############## Define headers and sourcse ################
 set( interfaceHdr
@@ -61,6 +64,7 @@ set_target_properties(${PROJECT_NAME}
         )
 
 target_include_directories(${PROJECT_NAME}
+        PUBLIC ${Boost_INCLUDE_DIRS}
         #PUBLIC ${TENSORFLOW_LITE_INCLUDE_DIRS}
         PUBLIC ${CMAKE_SOURCE_DIR}/../tensorflow/
         # Run in tensorflow dir ./tensorflow/lite/tools/make/download_dependencies.sh to d/l flatbuffers
@@ -68,7 +72,10 @@ target_include_directories(${PROJECT_NAME}
         PUBLIC /usr/local/include )
 
 target_link_libraries(${PROJECT_NAME}
-            ${CMAKE_SOURCE_DIR}/lib/libtensorflowlite.so
+        ${Boost_LIBRARIES}
+        dlib
+        stdc++fs
+        ${CMAKE_SOURCE_DIR}/lib/libtensorflowlite.so
             #${TESNORFLOW_LITE_LIBRARIES}
         )
 
