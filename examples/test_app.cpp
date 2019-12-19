@@ -87,10 +87,11 @@ rgb_alpha_pixel rand_rgba(uint8_t alpha=255) {
 }
 
 
-template <class T>
-void resize(T* out, uint8_t* in, int image_height, int image_width,
+template <class OUT_T, class IN_T>
+void resize(OUT_T* out, IN_T* in, int image_height, int image_width,
             int image_channels, int wanted_height, int wanted_width,
-            int wanted_channels, bool normalize=true) {
+            int wanted_channels, bool normalize=true,
+            tflite::BuiltinOperator op=tflite::BuiltinOperator_RESIZE_BILINEAR) {
     int number_of_pixels = image_height * image_width * image_channels;
     std::unique_ptr<tflite::Interpreter> interpreter(new tflite::Interpreter);
 
@@ -117,7 +118,7 @@ void resize(T* out, uint8_t* in, int image_height, int image_width,
 
     tflite::ops::builtin::BuiltinOpResolver resolver;
     const TfLiteRegistration *resize_op =
-            resolver.FindOp(tflite::BuiltinOperator_RESIZE_BILINEAR, 1);
+            resolver.FindOp(op, 1);
     auto *params = reinterpret_cast<TfLiteResizeBilinearParams *>(
             malloc(sizeof(TfLiteResizeBilinearParams)));
     params->align_corners = false;
@@ -128,7 +129,7 @@ void resize(T* out, uint8_t* in, int image_height, int image_width,
 
     // fill input image
     // in[] are integers, cannot do memcpy() directly
-    auto input = interpreter->typed_tensor<T>(0);
+    auto input = interpreter->typed_tensor<OUT_T>(0);
     for (int i = 0; i < number_of_pixels; i++) {
         input[i] = in[i];
     }
@@ -139,14 +140,14 @@ void resize(T* out, uint8_t* in, int image_height, int image_width,
 
     interpreter->Invoke();
 
-    auto output = interpreter->typed_tensor<T>(2);
+    auto output = interpreter->typed_tensor<OUT_T>(2);
     auto output_number_of_pixels = wanted_height * wanted_width * wanted_channels;
 
     for (int i = 0; i < output_number_of_pixels; i++) {
         if (normalize) {
-            out[i] = ((T) output[i] - IMAGE_MEAN) / IMAGE_STD;
+            out[i] = ((OUT_T) output[i] - IMAGE_MEAN) / IMAGE_STD;
         } else {
-            out[i] = (T) output[i];
+            out[i] = (OUT_T) output[i];
         }
     }
 }
@@ -289,7 +290,13 @@ int main(int ac, const char *const *av) {
         std::cout << std::endl;
     }
 
-    dlib::array2d<rgb_alpha_pixel> out_img(TENSOR_HEIGHT,TENSOR_WIDTH);
+    std::vector<float> result(img.nr() * img.nc() * NUM_CLASSES);
+    resize<float>(result.data(), output,
+                  TENSOR_HEIGHT, TENSOR_WIDTH, NUM_CLASSES,
+                  img.nr(), img.nc(), NUM_CLASSES,
+                  true);
+
+    dlib::array2d<rgb_alpha_pixel> out_img(img.nr(), img.nc());
     std::vector<rgb_alpha_pixel> mSegmentColors;
     for (int i = 0; i < NUM_CLASSES; i++) {
         if (i == 0) {
@@ -300,13 +307,13 @@ int main(int ac, const char *const *av) {
     }
 
     float maxVal = 0;
-    for (int row=0; row<TENSOR_HEIGHT; row++) {
-        for (int col=0; col<TENSOR_WIDTH; col++) {
+    for (int row=0; row<img.nr(); row++) {
+        for (int col=0; col<img.nc(); col++) {
             int mSegmentBits = 0;
 
             for (int c = 0; c < NUM_CLASSES; c++) {
-                long index = (row * TENSOR_WIDTH * NUM_CLASSES + col * NUM_CLASSES + c);
-                float val = output[index];
+                long index = (row * img.nc() * NUM_CLASSES + col * NUM_CLASSES + c);
+                float val = result[index];
                 if (c == 0 || val > maxVal) {
                     maxVal = val;
                     mSegmentBits = c;
