@@ -35,10 +35,13 @@ find_package(dlib REQUIRED)
 ############## Define headers and sourcse ################
 set( interfaceHdr
         include/util/utils.h
+
 )
 
 set( interfaceSrc
         src/util/utils.cpp
+        #https://github.com/tensorflow/tensorflow/issues/32073 must include workaround, not fixed until recently
+        ${CMAKE_SOURCE_DIR}/../tensorflow/tensorflow/lite/tools/evaluation/utils.cc
 )
 
 #source_group("Interface Header Files" FILES ${interfaceHdr})
@@ -67,7 +70,7 @@ target_include_directories(${PROJECT_NAME}
         PUBLIC ${Boost_INCLUDE_DIRS}
         #PUBLIC ${TENSORFLOW_LITE_INCLUDE_DIRS}
         PUBLIC ${CMAKE_SOURCE_DIR}/../tensorflow/
-        # Run in tensorflow dir ./tensorflow/lite/tools/make/download_dependencies.sh to d/l flatbuffers
+        # Run ./tensorflow/lite/tools/make/download_dependencies.sh in tensorflow dir to d/l flatbuffer deps.
         PUBLIC ${CMAKE_SOURCE_DIR}/../tensorflow/tensorflow/lite/tools/make/downloads/flatbuffers/include/
         PUBLIC /usr/local/include )
 
@@ -76,6 +79,7 @@ target_link_libraries(${PROJECT_NAME}
         dlib
         stdc++fs
         ${CMAKE_SOURCE_DIR}/lib/libtensorflowlite.so
+        ${CMAKE_SOURCE_DIR}/lib/libtensorflowlite_gpu_gl.so
             #${TESNORFLOW_LITE_LIBRARIES}
         )
 

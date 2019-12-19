@@ -1,6 +1,7 @@
 #include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/uio.h>
 #include <string>
 #include <vector>
 #include <random>
@@ -23,7 +24,12 @@
 #include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/model.h"
 #include "tensorflow/lite/string_util.h"
+#include "tensorflow/lite/delegates/gpu/gl_delegate.h"
 #include "tensorflow/lite/kernels/register.h"
+#include "tensorflow/lite/tools/evaluation/utils.h"
+
+
+#define LOG(x) std::cerr
 
 #define TENSOR_HEIGHT 257
 #define TENSOR_WIDTH 257
@@ -32,9 +38,6 @@
 #define IMAGE_STD 128.0f
 #define NUM_CLASSES 21
 #define COLOR_CHANNELS 3
-#define BYTES_PER_POINT 4
-
-//#define rand_rgba() (uint8_t)(255.f*(((double) std::rand() / (RAND_MAX)) + 1))
 
 // See https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/examples/minimal/minimal.cc
 // See https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/examples/label_image/label_image.cc
@@ -43,6 +46,7 @@ namespace {
     namespace fs = std::experimental::filesystem;
     namespace po = boost::program_options;
 } // namespace
+
 
 std::string parseStringFromOpts(const po::variables_map& vm, const std::string& id) {
     if (vm.count(id) == 0) {
@@ -63,15 +67,34 @@ std::string parsePathFromOpts(const po::variables_map& vm, const std::string& id
     return path;
 }
 
-/*rgb_alpha_pixel rand_rgba(uint8_t alpha=255) {
-//    int a = std::rand();
-//    return rgb_alpha_pixel((unsigned char) a, (unsigned char) a >> 8, (unsigned char) a >> 16, alpha);
-      return rgb_alpha_pixel(
-              (unsigned char) std::rand(),
-              (unsigned char) std::rand(),
-              (unsigned char) std::rand(),
-              alpha);
-}*/
+using TfLiteDelegatePtr = tflite::Interpreter::TfLiteDelegatePtr;
+using TfLiteDelegatePtrMap = std::map<std::string, TfLiteDelegatePtr>;
+
+TfLiteDelegatePtr CreateGPUDelegate(tflite::FlatBufferModel *model) {
+#if defined(__ANDROID__)
+    TfLiteGpuDelegateOptionsV2 gpu_opts = TfLiteGpuDelegateOptionsV2Default();
+  gpu_opts.inference_preference =
+      TFLITE_GPU_INFERENCE_PREFERENCE_SUSTAINED_SPEED;
+  gpu_opts.inference_priority1 =
+      s->allow_fp16 ? TFLITE_GPU_INFERENCE_PRIORITY_MIN_LATENCY
+                    : TFLITE_GPU_INFERENCE_PRIORITY_MAX_PRECISION;
+  return tflite::evaluation::CreateGPUDelegate(model, &gpu_opts);
+#else
+    return tflite::evaluation::CreateGPUDelegate(model);
+#endif
+}
+
+TfLiteDelegatePtrMap GetDelegates(tflite::FlatBufferModel* model) {
+    TfLiteDelegatePtrMap delegates;
+    auto delegate = CreateGPUDelegate(model);
+    if (!delegate) {
+        LOG(INFO) << "GPU acceleration is unsupported on this platform.";
+    } else {
+        delegates.emplace("GPU", std::move(delegate));
+    }
+
+    return delegates;
+}
 
 rgb_alpha_pixel rand_rgba(uint8_t alpha=255) {
     std::random_device r;
@@ -153,11 +176,14 @@ void resize(OUT_T* out, IN_T* in, int image_height, int image_width,
 }
 
 int main(int ac, const char *const *av) {
+    bool use_gpu = false;
+
     po::options_description desc("C++ segmentation example using TFLite");
     desc.add_options()("help,H", "print help message")(
             "model,M", po::value<std::string>(), "specify pretrained TFLite segmentation model path")(
             "input,I", po::value<std::string>(), "specify file to input")(
-            "output,O", po::value<std::string>(), "specify file to output");
+            "output,O", po::value<std::string>(), "specify file to output")(
+            "gpu,G", po::bool_switch(&use_gpu), "description");
 
     po::variables_map vm;
     po::store(po::parse_command_line(ac, av, desc), vm);
@@ -215,6 +241,18 @@ int main(int ac, const char *const *av) {
         std::cout << std::endl;
     }
 
+    if (use_gpu) {
+        auto delegates_ = GetDelegates(model.get());
+        for (const auto &delegate : delegates_) {
+            if (interpreter->ModifyGraphWithDelegate(delegate.second.get()) !=
+                kTfLiteOk) {
+                LOG(FATAL) << "Failed to apply " << delegate.first << " delegate.";
+            } else {
+                LOG(INFO) << "Applied " << delegate.first << " delegate.";
+            }
+        }
+    }
+
 
     // Resize input tensors, if desired.
     interpreter->AllocateTensors();
@@ -226,14 +264,6 @@ int main(int ac, const char *const *av) {
     image_window raw_input_win(img, "RAW Input Image");
 
     // TODO: Resize to [1,257,257,3]
-//    array2d<rgb_pixel> in_img(TENSOR_HEIGHT,TENSOR_WIDTH);
-
-//    resize_image(img, in_img, interpolate_bilinear());
-//
-//    printf("Image Size: %ldx%ld\n", img.nc(), img.nr());
-//    image_window input_win(in_img, "Input Image");
-
-    // get warp image after transformation
     std::vector<uint8_t> in;
 
     // iterate over rows & cols
@@ -256,15 +286,15 @@ int main(int ac, const char *const *av) {
 
     float* input = interpreter->typed_input_tensor<float>(0);
     resize<float>(input, in.data(),
-                  img.nr(), img.nc(), 3,
-                  TENSOR_HEIGHT, TENSOR_WIDTH, 3);
+                  img.nr(), img.nc(), COLOR_CHANNELS,
+                  TENSOR_HEIGHT, TENSOR_WIDTH, COLOR_CHANNELS);
 
 
     // Fill `input`.
     dlib::array2d<rgb_pixel> test_img(TENSOR_HEIGHT,TENSOR_WIDTH);
     for (int row=0; row<test_img.nr(); row++) {
         for (int col=0; col<test_img.nc(); col++) {
-            long index = (row * TENSOR_WIDTH + col) * 3; // + k;
+            long index = (row * TENSOR_WIDTH + col) * COLOR_CHANNELS; // + k;
             test_img[row][col].red = input[index]*IMAGE_STD+IMAGE_MEAN;
             test_img[row][col].green = input[index+1]*IMAGE_STD+IMAGE_MEAN;
             test_img[row][col].blue = input[index+2]*IMAGE_STD+IMAGE_MEAN;
