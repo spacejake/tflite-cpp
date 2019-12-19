@@ -327,6 +327,8 @@ int main(int ac, const char *const *av) {
     // TODO: save/display output
     image_window output_win(out_img, "Output Image");
 
+    save_png(out_img, outputPath);
+
     std::cout << "The End!" << std::endl;
 
     raw_input_win.wait_until_closed();
